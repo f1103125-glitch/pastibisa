@@ -1,0 +1,6 @@
+{
+  "name": "Tracker Pengeluaran Bulanan",
+  "description": "Aplikasi pelacak pengeluaran bulanan dengan grafik laporan anggaran, notifikasi peringatan pintar, dan asisten AI keuangan pribadi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
