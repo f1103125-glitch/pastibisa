@@ -101,8 +101,55 @@ User Specific Query/Request:
       parts: [{ text: prompt }]
     });
 
-    // Call Gemini 3.5 Flash
-    const response = await ai.models.generateContent({
+    // Helper for robust retry-with-fallback logic
+    const generateContentWithRetry = async (
+      aiClient: any,
+      reqOptions: { model: string; contents: any[]; config: any },
+      maxRetries = 3
+    ): Promise<any> => {
+      let attempt = 0;
+      let modelToUse = reqOptions.model;
+      
+      while (attempt < maxRetries) {
+        try {
+          return await aiClient.models.generateContent({
+            ...reqOptions,
+            model: modelToUse
+          });
+        } catch (err: any) {
+          attempt++;
+          const errMsg = err.message || (typeof err === 'object' ? JSON.stringify(err) : String(err));
+          const isTransient = 
+            err.status === 503 || 
+            err.status === 429 || 
+            errMsg.includes("503") || 
+            errMsg.includes("429") || 
+            errMsg.includes("UNAVAILABLE") || 
+            errMsg.includes("RESOURCE_EXHAUSTED") ||
+            errMsg.includes("high demand") ||
+            errMsg.includes("overloaded");
+            
+          if (isTransient && attempt < maxRetries) {
+            // Calculate delay: 1s, 2s, 4s...
+            const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+            console.warn(`[AI Advice Engine] Transient error encountered on model ${modelToUse} (Attempt ${attempt}/${maxRetries}): ${errMsg}. Retrying in ${Math.round(delay)}ms...`);
+            
+            // On fallback, let's switch to the high-availability lite model gemini-3.1-flash-lite
+            if (modelToUse === "gemini-3.5-flash") {
+              console.log("[AI Advice Engine] Falling back to robust model 'gemini-3.1-flash-lite' to guarantee uptime under high demand.");
+              modelToUse = "gemini-3.1-flash-lite";
+            }
+            
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          } else {
+            throw err;
+          }
+        }
+      }
+    };
+
+    // Call Gemini with high-resilience retry mechanism
+    const response = await generateContentWithRetry(ai, {
       model: "gemini-3.5-flash",
       contents: contentsList,
       config: {
@@ -116,6 +163,27 @@ User Specific Query/Request:
 
   } catch (err: any) {
     console.error("AI Error:", err);
+    
+    // Check if it's an API key expiration or invalidation error
+    const errString = typeof err === 'object' ? JSON.stringify(err) : String(err);
+    const isApiKeyError = 
+      errString.includes("API key expired") || 
+      errString.includes("API_KEY_INVALID") || 
+      errString.includes("expired") || 
+      errString.includes("key expired") ||
+      (err.message && (
+        err.message.includes("API key expired") || 
+        err.message.includes("API_KEY_INVALID") || 
+        err.message.includes("expired")
+      ));
+
+    if (isApiKeyError) {
+      return res.status(401).json({
+        error: "GEMINI_API_KEY_EXPIRED",
+        message: "Your Gemini API Key has expired or is invalid. If you are experiencing this inside AI Studio, please refresh the page or check the 'Secrets' panel in Settings. If you have deployed this app to Vercel/GitHub, please go to your Vercel Dashboard, select your project, go to 'Settings > Environment Variables', and update the 'GEMINI_API_KEY' with a fresh API Key from Google AI Studio (https://aistudio.google.com/)."
+      });
+    }
+
     res.status(500).json({ 
       error: "Internal AI Engine Error", 
       message: "An error occurred while communicating with the AI backend: " + (err.message || err)
